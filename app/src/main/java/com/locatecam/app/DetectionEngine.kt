@@ -31,10 +31,21 @@ class DetectionEngine(context: Context) {
     var vocab: Vocab? = null
 
     init {
-        session = createSession(true)
+        session = try {
+            useNnapi = true
+            engineMode = "NNAPI"
+            createSession(true)
+        } catch (t: Throwable) {
+            Log.w(TAG, "NNAPI session creation failed, fallback to CPU: ${t.message}")
+            useNnapi = false
+            engineMode = "CPU"
+            createSession(false)
+        }
         inputName = session.inputInfo.keys.first()
-        Log.i(TAG, "model loaded, input=$inputName, inputs=${session.inputInfo.keys}, useNnapi=true")
+        Log.i(TAG, "model loaded, input=$inputName, engine=$engineMode")
     }
+
+    var engineMode = "CPU"
 
     private fun createSession(nnapi: Boolean): OrtSession {
         val opts = OrtSession.SessionOptions().apply {
