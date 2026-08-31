@@ -7,3 +7,4 @@
 - 全程离线，无任何联网权限
 
 词库见 tools/vocab_zh.json，修改后自动触发云端重新编译出 APK（GitHub Actions）。
+
