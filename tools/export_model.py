@@ -26,19 +26,8 @@ def export_model(en_terms):
     model = YOLOWorld("yolov8s-worldv2.pt")
     model.set_classes(en_terms)
 
-    base_kwargs = dict(format="onnx", imgsz=640)
-
-    try:
-        try:
-            out = model.export(quantize=8, data="coco8.yaml", **base_kwargs)
-        except TypeError:
-            out = model.export(int8=True, data="coco8.yaml", **base_kwargs)
-        return str(out), "int8"
-    except Exception as e:
-        print(f"INT8 export failed, falling back to FP32: {e}")
-        traceback.print_exc()
-        out = model.export(**base_kwargs)
-        return str(out), "fp32"
+    out = model.export(format="onnx", imgsz=640)
+    return str(out), "fp32"
 
 
 def validate(onnx_path, vocab, en_terms):
@@ -63,10 +52,12 @@ def validate(onnx_path, vocab, en_terms):
         print(f"output shape: {out.shape}")
         assert out.shape[1] == 4 + len(en_terms), f"unexpected nc: {out.shape[1]} vs {4 + len(en_terms)}"
         pi = en_terms.index("person")
-        best = float(out[0, 4 + pi, :].max())
-        print(f"person sanity score on bus.jpg: {best:.3f}")
-        if best < 0.3:
-            print("WARNING: low person score, model may be degraded")
+        bi = en_terms.index("bus")
+        p_best = float(out[0, 4 + pi, :].max())
+        b_best = float(out[0, 4 + bi, :].max())
+        print(f"person score: {p_best:.3f}, bus score: {b_best:.3f}")
+        assert p_best > 0.35, f"person score too low: {p_best}"
+        assert b_best > 0.30, f"bus score too low: {b_best}"
     except Exception as e:
         print(f"validation warning (non-fatal): {e}")
 
