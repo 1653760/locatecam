@@ -181,8 +181,8 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 hudText.text = String.format(
                     Locale.CHINA,
-                    "预处理 %d ms | 推理 %d ms | 后处理 %d ms\n端到端 %d ms | %.1f FPS",
-                    timing.preMs, timing.inferMs, timing.postMs, totalMs, fpsEma
+                    "引擎 %s | 预处理 %d ms | 推理 %d ms | 后处理 %d ms\n端到端 %d ms | %.1f FPS",
+                    e.engineMode, timing.preMs, timing.inferMs, timing.postMs, totalMs, fpsEma
                 )
                 overlayView.update(dets, srcW, srcH) { i -> v?.display(i) ?: "?" }
             }
