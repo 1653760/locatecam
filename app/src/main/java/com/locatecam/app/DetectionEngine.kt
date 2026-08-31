@@ -19,6 +19,7 @@ class DetectionEngine(context: Context) {
     private var session: OrtSession
     private var inputName: String
     @Volatile private var useNnapi = true
+    var engineMode = "CPU"
 
     private val inputSize = 640
     private val numAnchors = 8400
@@ -44,8 +45,6 @@ class DetectionEngine(context: Context) {
         inputName = session.inputInfo.keys.first()
         Log.i(TAG, "model loaded, input=$inputName, engine=$engineMode")
     }
-
-    var engineMode = "CPU"
 
     private fun createSession(nnapi: Boolean): OrtSession {
         val opts = OrtSession.SessionOptions().apply {
