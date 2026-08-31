@@ -35,6 +35,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var vocab: Vocab? = null
     private var fpsEma = 0f
     private var lastFrameAt = 0L
+    private var lastProcessAt = 0L
     private val rgb = IntArray(YuvToRgb.OUT * YuvToRgb.OUT)
 
     private val permissionLauncher = registerForActivityResult(
@@ -152,10 +153,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun onFrame(image: ImageProxy) {
         val e = engine
-        if (e == null || !busy.compareAndSet(false, true)) {
+        if (e == null) {
             image.close()
             return
         }
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastProcessAt < THROTTLE_MS || !busy.compareAndSet(false, true)) {
+            image.close()
+            return
+        }
+        lastProcessAt = nowMs
         try {
             val t0 = System.nanoTime()
             val srcW: Int
@@ -201,5 +208,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "LocateCam"
+        private const val THROTTLE_MS = 220L
     }
 }
