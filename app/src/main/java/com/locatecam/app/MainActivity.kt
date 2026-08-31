@@ -83,7 +83,7 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "init failed", t)
-                runOnUiThread { hudText.text = "初始化失败：${t.message}" }
+                runOnUiThread { hudText.text = "初始化失败：${t.javaClass.simpleName}: ${t.message}" }
             }
         }.start()
     }
