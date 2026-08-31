@@ -208,6 +208,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "LocateCam"
-        private const val THROTTLE_MS = 220L
+        private const val THROTTLE_MS = 1000L
     }
 }
