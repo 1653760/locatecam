@@ -23,7 +23,7 @@ class DetectionEngine(context: Context) {
 
     private val inputSize = 640
     private val numAnchors = 8400
-    private val confidenceThreshold = 0.18f
+    private val confidenceThreshold = 0.10f
     private val iouThreshold = 0.45f
 
     private val floatBuf = FloatBuffer.wrap(FloatArray(1 * 3 * inputSize * inputSize))
