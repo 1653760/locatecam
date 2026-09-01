@@ -277,44 +277,6 @@ class MainActivity : AppCompatActivity() {
             busy.set(false)
         }
     }
-        val nowMs = System.currentTimeMillis()
-        if (nowMs - lastProcessAt < THROTTLE_MS || !busy.compareAndSet(false, true)) {
-            image.close()
-            return
-        }
-        lastProcessAt = nowMs
-        try {
-            val t0 = System.nanoTime()
-            val srcInfo: YuvToRgb.FrameInfo
-            try {
-                srcInfo = YuvToRgb.convert(image, rgb)
-            } finally {
-                image.close()
-            }
-            val (dets, timing) = e.detect(rgb, srcInfo)
-            val totalMs = (System.nanoTime() - t0) / 1_000_000
-            val now = System.currentTimeMillis()
-            if (lastFrameAt > 0) {
-                val interval = (now - lastFrameAt).coerceAtLeast(1)
-                val fps = 1000f / interval
-                fpsEma = if (fpsEma == 0f) fps else fpsEma * 0.9f + fps * 0.1f
-            }
-            lastFrameAt = now
-            val v = vocab
-            runOnUiThread {
-                hudText.text = String.format(
-                    Locale.CHINA,
-                    "引擎 %s | 预处理 %d ms | 推理 %d ms | 后处理 %d ms\n端到端 %d ms | %.1f FPS",
-                    e.engineMode, timing.preMs, timing.inferMs, timing.postMs, totalMs, fpsEma
-                )
-                overlayView.update(dets, srcInfo.w, srcInfo.h) { i -> v?.display(i) ?: "?" }
-            }
-        } catch (t: Throwable) {
-            Log.e(TAG, "frame error", t)
-        } finally {
-            busy.set(false)
-        }
-    }
 
     override fun onDestroy() {
         super.onDestroy()
