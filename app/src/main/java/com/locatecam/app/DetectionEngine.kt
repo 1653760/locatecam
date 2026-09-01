@@ -15,7 +15,7 @@ class Timing(val preMs: Long, val inferMs: Long, val postMs: Long)
 class DetectionEngine(context: Context) {
 
     private val env = OrtEnvironment.getEnvironment()
-    private val modelBytes = context.assets.open("yolo_world.onnx").readBytes()
+    private var modelBytes: ByteArray? = context.assets.open("yolo_world.onnx").readBytes()
     private var session: OrtSession
     private var inputName: String
     @Volatile private var useNnapi = true
@@ -32,21 +32,25 @@ class DetectionEngine(context: Context) {
     var vocab: Vocab? = null
 
     init {
+        val bytes = modelBytes!!
         session = try {
             useNnapi = true
             engineMode = "NNAPI"
-            createSession(true)
+            createSession(bytes, true)
         } catch (t: Throwable) {
             Log.w(TAG, "NNAPI session creation failed, fallback to CPU: ${t.message}")
             useNnapi = false
             engineMode = "CPU"
-            createSession(false)
+            createSession(bytes, false)
+        }
+        if (!useNnapi) {
+            modelBytes = null
         }
         inputName = session.inputInfo.keys.first()
         Log.i(TAG, "model loaded, input=$inputName, engine=$engineMode")
     }
 
-    private fun createSession(nnapi: Boolean): OrtSession {
+    private fun createSession(bytes: ByteArray, nnapi: Boolean): OrtSession {
         val opts = OrtSession.SessionOptions().apply {
             if (nnapi) {
                 try {
@@ -59,19 +63,21 @@ class DetectionEngine(context: Context) {
             setIntraOpNumThreads(4)
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         }
-        return env.createSession(modelBytes, opts)
+        return env.createSession(bytes, opts)
     }
 
     @Synchronized
     private fun rebuildCpu(): Boolean {
         if (!useNnapi) return false
+        val bytes = modelBytes ?: return false
         Log.w(TAG, "switching to CPU session")
         useNnapi = false
         try {
             val old = session
-            session = createSession(false)
+            session = createSession(bytes, false)
             inputName = session.inputInfo.keys.first()
             old.close()
+            modelBytes = null
             Log.i(TAG, "CPU session ready, input=$inputName")
             return true
         } catch (e: Throwable) {
