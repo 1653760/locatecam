@@ -165,17 +165,13 @@ class MainActivity : AppCompatActivity() {
         lastProcessAt = nowMs
         try {
             val t0 = System.nanoTime()
-            val srcW: Int
-            val srcH: Int
+            val srcInfo: YuvToRgb.FrameInfo
             try {
-                YuvToRgb.convert(image, rgb)
-                val size = YuvToRgb.uprightSize(image)
-                srcW = size.first
-                srcH = size.second
+                srcInfo = YuvToRgb.convert(image, rgb)
             } finally {
                 image.close()
             }
-            val (dets, timing) = e.detect(rgb, srcW, srcH)
+            val (dets, timing) = e.detect(rgb, srcInfo)
             val totalMs = (System.nanoTime() - t0) / 1_000_000
             val now = System.currentTimeMillis()
             if (lastFrameAt > 0) {
@@ -191,7 +187,7 @@ class MainActivity : AppCompatActivity() {
                     "引擎 %s | 预处理 %d ms | 推理 %d ms | 后处理 %d ms\n端到端 %d ms | %.1f FPS",
                     e.engineMode, timing.preMs, timing.inferMs, timing.postMs, totalMs, fpsEma
                 )
-                overlayView.update(dets, srcW, srcH) { i -> v?.display(i) ?: "?" }
+                overlayView.update(dets, srcInfo.w, srcInfo.h) { i -> v?.display(i) ?: "?" }
             }
         } catch (t: Throwable) {
             Log.e(TAG, "frame error", t)
