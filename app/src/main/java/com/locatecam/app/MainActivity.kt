@@ -88,14 +88,17 @@ class MainActivity : AppCompatActivity() {
                 e.warmup()
                 engine = e
                 var t: TrackerEngine? = null
+                var trackerErr = "未知"
                 try {
                     t = TrackerEngine(this)
                 } catch (te: Throwable) {
                     Log.w(TAG, "tracker unavailable: ${te.message}")
+                    trackerErr = "${te.javaClass.simpleName}: ${te.message}"
                 }
                 tracker = t
                 runOnUiThread {
-                    hudText.text = if (t != null) "就绪（检测+跟踪就绪），开始识别：手机 / 人 / 杯子 / 书" else "就绪（跟踪器加载失败，仅检测）"
+                    hudText.text = if (t != null) "就绪（检测+跟踪就绪），开始识别：手机 / 人 / 杯子 / 书"
+                    else "跟踪器加载失败（$trackerErr）"
                     startCamera()
                 }
             } catch (t: Throwable) {
