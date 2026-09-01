@@ -42,38 +42,50 @@ def export_model(en_terms):
 
 
 def validate(onnx_path, vocab, en_terms):
-    try:
-        import urllib.request
+    import numpy as np
+    import onnxruntime as ort
+    import requests
+    from PIL import Image
 
-        import numpy as np
-        import onnxruntime as ort
-        from PIL import Image
+    sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+    inputs = sess.get_inputs()
+    print(f"inputs: {[(i.name, i.shape) for i in inputs]}")
+    print(f"outputs: {[(o.name, o.shape) for o in sess.get_outputs()]}")
+    if inputs[0].name != "images":
+        print(f"WARNING: input name is {inputs[0].name}, app expects 'images'")
 
-        sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
-        inputs = sess.get_inputs()
-        print(f"inputs: {[(i.name, i.shape) for i in inputs]}")
-        print(f"outputs: {[(o.name, o.shape) for o in sess.get_outputs()]}")
-        if inputs[0].name != "images":
-            print(f"WARNING: input name is {inputs[0].name}, app expects 'images'")
+    im = None
+    for url in (
+        "https://raw.githubusercontent.com/ultralytics/ultralytics/main/ultralytics/assets/bus.jpg",
+        "https://ultralytics.com/images/bus.jpg",
+    ):
+        try:
+            data = requests.get(url, timeout=30).content
+            with open("bus.jpg", "wb") as f:
+                f.write(data)
+            im = Image.open("bus.jpg").convert("RGB")
+            break
+        except Exception as e:
+            print(f"download failed from {url}: {e}")
+    if im is None:
+        print("SKIP validation: no test image available")
+        return
 
-        urllib.request.urlretrieve("https://ultralytics.com/images/bus.jpg", "bus.jpg")
-        im = Image.open("bus.jpg").convert("RGB").resize((640, 640))
-        x = np.asarray(im, dtype=np.float32).transpose(2, 0, 1)[None] / 255.0
-        out = sess.run(None, {inputs[0].name: x})[0]
-        print(f"output shape: {out.shape}")
-        extra = out.shape[1] - 4 - len(en_terms)
-        assert extra >= 0, f"unexpected nc: {out.shape[1]} vs {4 + len(en_terms)}"
-        if extra > 0:
-            print(f"note: {extra} extra channels (seg coeffs), ignored by app")
-        pi = en_terms.index("person")
-        bi = en_terms.index("bus")
-        p_best = float(out[0, 4 + pi, :].max())
-        b_best = float(out[0, 4 + bi, :].max())
-        print(f"person score: {p_best:.3f}, bus score: {b_best:.3f}")
-        assert p_best > 0.35, f"person score too low: {p_best}"
-        assert b_best > 0.30, f"bus score too low: {b_best}"
-    except Exception as e:
-        print(f"validation warning (non-fatal): {e}")
+    im = im.resize((640, 640))
+    x = np.asarray(im, dtype=np.float32).transpose(2, 0, 1)[None] / 255.0
+    out = sess.run(None, {inputs[0].name: x})[0]
+    print(f"output shape: {out.shape}")
+    extra = out.shape[1] - 4 - len(en_terms)
+    assert extra >= 0, f"unexpected nc: {out.shape[1]} vs {4 + len(en_terms)}"
+    if extra > 0:
+        print(f"note: {extra} extra channels (seg coeffs), ignored by app")
+    pi = en_terms.index("person")
+    bi = en_terms.index("bus")
+    p_best = float(out[0, 4 + pi, :].max())
+    b_best = float(out[0, 4 + bi, :].max())
+    print(f"person score: {p_best:.3f}, bus score: {b_best:.3f}")
+    assert p_best > 0.35, f"person score too low: {p_best}"
+    assert b_best > 0.30, f"bus score too low: {b_best}"
 
 
 def main():
