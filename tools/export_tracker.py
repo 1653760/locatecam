@@ -63,7 +63,18 @@ def load_weights(net):
     return False
 
 
+class MapsOnly(torch.nn.Module):
+    def __init__(self, net):
+        super().__init__()
+        self.net = net
+
+    def forward(self, z, x):
+        out = self.net(z, x)
+        return out["score_map"], out["size_map"], out["offset_map"]
+
+
 def export_onnx(net, path):
+    wrapper = MapsOnly(net).eval()
     dummy = (torch.randn(1, 3, TEMPLATE, TEMPLATE), torch.randn(1, 3, SEARCH, SEARCH))
     kwargs = dict(
         opset_version=17,
@@ -71,9 +82,9 @@ def export_onnx(net, path):
         output_names=["score_map", "size_map", "offset_map"],
     )
     try:
-        torch.onnx.export(net, dummy, path, dynamo=False, **kwargs)
+        torch.onnx.export(wrapper, dummy, path, dynamo=False, **kwargs)
     except TypeError:
-        torch.onnx.export(net, dummy, path, **kwargs)
+        torch.onnx.export(wrapper, dummy, path, **kwargs)
     try:
         import onnxsim
 
