@@ -65,12 +65,15 @@ def load_weights(net):
 
 def export_onnx(net, path):
     dummy = (torch.randn(1, 3, TEMPLATE, TEMPLATE), torch.randn(1, 3, SEARCH, SEARCH))
-    torch.onnx.export(
-        net, dummy, path,
-        opset_version=15,
+    kwargs = dict(
+        opset_version=17,
         input_names=["z", "x"],
         output_names=["score_map", "size_map", "offset_map"],
     )
+    try:
+        torch.onnx.export(net, dummy, path, dynamo=False, **kwargs)
+    except TypeError:
+        torch.onnx.export(net, dummy, path, **kwargs)
     try:
         import onnxsim
 
