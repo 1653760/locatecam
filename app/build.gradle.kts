@@ -11,8 +11,8 @@ android {
         applicationId = "com.locatecam.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.8"
+        versionCode = 9
+        versionName = "0.9"
     }
 
     buildTypes {
