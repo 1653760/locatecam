@@ -199,7 +199,7 @@ def main():
     try:
         from onnxruntime.quantization import QuantType, quantize_dynamic
 
-        quantize_dynamic(fp32, "tracker_int8.onnx", weight_type=QuantType.QInt8)
+        quantize_dynamic(fp32, "tracker_int8.onnx", weight_type=QuantType.QInt8, op_types_to_quantize=["MatMul"])
         print(f"int8 size: {os.path.getsize('tracker_int8.onnx') / 1e6:.1f} MB")
         if synth_test("tracker_int8.onnx"):
             final = "tracker_int8.onnx"
