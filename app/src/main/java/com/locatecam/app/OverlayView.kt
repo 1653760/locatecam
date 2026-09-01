@@ -17,6 +17,35 @@ class OverlayView @JvmOverloads constructor(
     private var srcW = 1
     private var srcH = 1
     private var labels: ((Int) -> String)? = null
+    private var targetBox: RectF? = null
+    private var targetLabel = ""
+
+    private val targetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 8f
+        color = 0xFFFF5252.toInt()
+    }
+    private val targetTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFF5252.toInt()
+        textSize = 46f
+        isFakeBoldText = true
+    }
+    private val crossPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        color = 0xAAFF5252.toInt()
+    }
+
+    fun setTarget(box: RectF?, label: String) {
+        targetBox = box
+        targetLabel = label
+        invalidate()
+    }
+
+    fun clearTarget() {
+        targetBox = null
+        invalidate()
+    }
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -56,6 +85,30 @@ class OverlayView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        val vw = width.toFloat()
+        val vh = height.toFloat()
+        val tb = targetBox
+        if (tb != null) {
+            val scaleT = maxOf(vw / srcW, vh / srcH)
+            val dxT = (vw - srcW * scaleT) / 2f
+            val dyT = (vh - srcH * scaleT) / 2f
+            val r = RectF(
+                tb.left * scaleT + dxT,
+                tb.top * scaleT + dyT,
+                tb.right * scaleT + dxT,
+                tb.bottom * scaleT + dyT
+            )
+            canvas.drawRect(r, targetPaint)
+            val cx = r.centerX()
+            val cy = r.centerY()
+            val arm = minOf(r.width(), r.height()) * 0.12f + 14f
+            canvas.drawLine(cx - arm, cy, cx + arm, cy, crossPaint)
+            canvas.drawLine(cx, cy - arm, cx, cy + arm, crossPaint)
+            val text = "锁定: $targetLabel"
+            targetTextPaint.textSize = 46f
+            canvas.drawText(text, (r.left).coerceIn(0f, (vw - targetTextPaint.measureText(text)).coerceAtLeast(0f)), (r.top - 14f).coerceAtLeast(52f), targetTextPaint)
+            return
+        }
         if (detections.isEmpty()) return
         val labels = this.labels ?: return
         val vw = width.toFloat()
