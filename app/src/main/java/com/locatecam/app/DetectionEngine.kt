@@ -81,10 +81,10 @@ class DetectionEngine(context: Context) {
     }
 
     fun warmup() {
-        detect(IntArray(inputSize * inputSize) { -0x1000000 }, inputSize, inputSize)
+        detect(IntArray(inputSize * inputSize) { -0x1000000 }, YuvToRgb.FrameInfo(inputSize, inputSize, inputSize, 0, 0))
     }
 
-    fun detect(rgb: IntArray, srcW: Int, srcH: Int): Pair<List<Detection>, Timing> {
+    fun detect(rgb: IntArray, info: YuvToRgb.FrameInfo): Pair<List<Detection>, Timing> {
         val t0 = System.nanoTime()
         fillTensor(rgb)
         val t1 = System.nanoTime()
@@ -103,7 +103,7 @@ class DetectionEngine(context: Context) {
             }
             outputs.use { out ->
                 val t2 = System.nanoTime()
-                val dets = parseOutput(out[0].value, srcW, srcH)
+                val dets = parseOutput(out[0].value, info)
                 val t3 = System.nanoTime()
                 return dets to Timing((t1 - t0) / 1_000_000, (t2 - t1) / 1_000_000, (t3 - t2) / 1_000_000)
             }
@@ -126,7 +126,7 @@ class DetectionEngine(context: Context) {
         }
     }
 
-    private fun parseOutput(value: Any, srcW: Int, srcH: Int): List<Detection> {
+    private fun parseOutput(value: Any, info: YuvToRgb.FrameInfo): List<Detection> {
         val sel = selectedIndices
         if (sel.isEmpty()) return emptyList()
         val rows: Array<FloatArray>
@@ -138,8 +138,11 @@ class DetectionEngine(context: Context) {
             return emptyList()
         }
 
-        val scaleX = srcW.toFloat() / inputSize
-        val scaleY = srcH.toFloat() / inputSize
+        val scale = info.cropSize.toFloat() / inputSize
+        val ox = info.offX.toFloat()
+        val oy = info.offY.toFloat()
+        val maxW = info.w.toFloat()
+        val maxH = info.h.toFloat()
         val candidates = ArrayList<Detection>()
 
         for (a in 0 until numAnchors) {
@@ -157,19 +160,19 @@ class DetectionEngine(context: Context) {
             val cy = rows[1][a]
             val w = rows[2][a]
             val h = rows[3][a]
-            val x1 = (cx - w / 2f) * scaleX
-            val y1 = (cy - h / 2f) * scaleY
-            val x2 = (cx + w / 2f) * scaleX
-            val y2 = (cy + h / 2f) * scaleY
+            val x1 = (cx - w / 2f) * scale + ox
+            val y1 = (cy - h / 2f) * scale + oy
+            val x2 = (cx + w / 2f) * scale + ox
+            val y2 = (cy + h / 2f) * scale + oy
             candidates.add(
                 Detection(
                     bestCi,
                     bestScore,
                     RectF(
-                        x1.coerceIn(0f, srcW.toFloat()),
-                        y1.coerceIn(0f, srcH.toFloat()),
-                        x2.coerceIn(0f, srcW.toFloat()),
-                        y2.coerceIn(0f, srcH.toFloat())
+                        x1.coerceIn(0f, maxW),
+                        y1.coerceIn(0f, maxH),
+                        x2.coerceIn(0f, maxW),
+                        y2.coerceIn(0f, maxH)
                     )
                 )
             )
