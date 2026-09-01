@@ -61,7 +61,10 @@ def validate(onnx_path, vocab, en_terms):
         x = np.asarray(im, dtype=np.float32).transpose(2, 0, 1)[None] / 255.0
         out = sess.run(None, {inputs[0].name: x})[0]
         print(f"output shape: {out.shape}")
-        assert out.shape[1] == 4 + len(en_terms), f"unexpected nc: {out.shape[1]} vs {4 + len(en_terms)}"
+        extra = out.shape[1] - 4 - len(en_terms)
+        assert extra >= 0, f"unexpected nc: {out.shape[1]} vs {4 + len(en_terms)}"
+        if extra > 0:
+            print(f"note: {extra} extra channels (seg coeffs), ignored by app")
         pi = en_terms.index("person")
         bi = en_terms.index("bus")
         p_best = float(out[0, 4 + pi, :].max())
