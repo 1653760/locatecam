@@ -23,7 +23,7 @@ def load_vocab():
 def export_model(en_terms):
     from ultralytics import YOLOE, YOLOWorld
 
-    for size in ("l", "m", "s"):
+    for size in ("l-seg", "m-seg", "s-seg"):
         try:
             model = YOLOE(f"yoloe-11{size}.pt")
             pe = model.get_text_pe(en_terms)
