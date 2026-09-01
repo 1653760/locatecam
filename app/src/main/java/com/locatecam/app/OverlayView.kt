@@ -113,8 +113,6 @@ class OverlayView @JvmOverloads constructor(
         }
         if (detections.isEmpty()) return
         val labels = this.labels ?: return
-        val vw = width.toFloat()
-        val vh = height.toFloat()
         val scale = maxOf(vw / srcW, vh / srcH)
         val dx = (vw - srcW * scale) / 2f
         val dy = (vh - srcH * scale) / 2f
