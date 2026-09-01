@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var tracking = false
     @Volatile private var lockedLabel = ""
     private var lowStreak = 0
+    private var trackFailCount = 0
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -94,7 +95,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 tracker = t
                 runOnUiThread {
-                    hudText.text = if (t != null) "就绪（检测+跟踪），开始识别：手机 / 人 / 杯子 / 书" else "就绪（仅检测）"
+                    hudText.text = if (t != null) "就绪（检测+跟踪就绪），开始识别：手机 / 人 / 杯子 / 书" else "就绪（跟踪器加载失败，仅检测）"
                     startCamera()
                 }
             } catch (t: Throwable) {
@@ -193,8 +194,29 @@ class MainActivity : AppCompatActivity() {
                 } finally {
                     image.close()
                 }
-                val res = t.track(fullFrame, fullW, fullH)
-                if (res.box == null || res.score < 0.25f) {
+                var res: TrackerEngine.TrackResult? = null
+                var trackError: Throwable? = null
+                try {
+                    res = t.track(fullFrame, fullW, fullH)
+                } catch (te: Throwable) {
+                    Log.e(TAG, "track error", te)
+                    trackError = te
+                    trackFailCount++
+                }
+                if (trackError != null) {
+                    if (trackFailCount >= 3) {
+                        tracking = false
+                        tracker = null
+                        runOnUiThread {
+                            overlayView.clearTarget()
+                            Toast.makeText(this@MainActivity, "跟踪引擎异常(${trackError.javaClass.simpleName})，已切回仅检测模式", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    return
+                }
+                trackFailCount = 0
+                val r = res!!
+                if (r.box == null || r.score < 0.25f) {
                     lowStreak++
                 } else {
                     lowStreak = 0
@@ -206,12 +228,12 @@ class MainActivity : AppCompatActivity() {
                         overlayView.clearTarget()
                         Toast.makeText(this@MainActivity, "目标丢失，重新搜索", Toast.LENGTH_SHORT).show()
                     } else {
-                        overlayView.setTarget(res.box, lockedLabel)
+                        overlayView.setTarget(r.box, lockedLabel)
                     }
                     hudText.text = String.format(
                         Locale.CHINA,
-                        "锁定 %s | 跟踪 %d ms | 置信 %.2f%s",
-                        lockedLabel, res.ms, res.score,
+                        "跟踪模式 | 锁定 %s | 跟踪 %d ms | 置信 %.2f%s",
+                        lockedLabel, r.ms, r.score,
                         if (lowStreak > 0) " (弱)" else ""
                     )
                 }
@@ -237,7 +259,7 @@ class MainActivity : AppCompatActivity() {
                     lastFrameAt = now
                     val v = vocab
                     val best = dets
-                        .filter { it.score >= 0.45f && it.box.width() * it.box.height() >= 0.02f * srcInfo.w * srcInfo.h }
+                        .filter { it.score >= 0.40f && it.box.width() * it.box.height() >= 0.015f * srcInfo.w * srcInfo.h }
                         .maxByOrNull { it.score }
                     var locked = false
                     if (best != null && t != null) {
@@ -257,12 +279,14 @@ class MainActivity : AppCompatActivity() {
                     }
                     runOnUiThread {
                         if (locked) {
-                            Toast.makeText(this@MainActivity, "已锁定：$lockedLabel", Toast.LENGTH_SHORT).show()
+                            overlayView.setTarget(best!!.box, lockedLabel)
+                            Toast.makeText(this@MainActivity, "已锁定：$lockedLabel，开始跟踪", Toast.LENGTH_LONG).show()
                         } else {
                             hudText.text = String.format(
                                 Locale.CHINA,
-                                "引擎 %s | 预处理 %d ms | 推理 %d ms | 后处理 %d ms\n端到端 %d ms | %.1f FPS",
-                                e.engineMode, timing.preMs, timing.inferMs, timing.postMs, totalMs, fpsEma
+                                "搜索模式%s | 引擎 %s | 推理 %d ms | 端到端 %d ms | %.1f FPS",
+                                if (t != null) "" else "（无跟踪器）",
+                                e.engineMode, timing.inferMs, totalMs, fpsEma
                             )
                             overlayView.update(dets, srcInfo.w, srcInfo.h) { i -> v?.display(i) ?: "?" }
                         }
