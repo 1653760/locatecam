@@ -55,7 +55,7 @@ class TrackerEngine(context: Context) {
         }
         session = env.createSession(bytes, opts)
         for ((k, v) in session!!.inputInfo) {
-            val s = v.info
+            val s = v.info.toString()
             if (s.contains(templateSize.toString())) zName = k.key
             if (s.contains(searchSize.toString())) xName = k.key
         }
