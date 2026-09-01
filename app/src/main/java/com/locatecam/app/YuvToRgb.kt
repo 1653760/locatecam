@@ -6,7 +6,25 @@ object YuvToRgb {
 
     const val OUT = 640
 
-    fun convert(image: ImageProxy, out: IntArray): IntArray {
+    data class FrameInfo(val w: Int, val h: Int, val cropSize: Int, val offX: Int, val offY: Int)
+
+    fun frameInfo(image: ImageProxy): FrameInfo {
+        val rot = image.imageInfo.rotationDegrees
+        val w2: Int
+        val h2: Int
+        if (rot == 90 || rot == 270) {
+            w2 = image.height
+            h2 = image.width
+        } else {
+            w2 = image.width
+            h2 = image.height
+        }
+        val crop = minOf(w2, h2)
+        return FrameInfo(w2, h2, crop, (w2 - crop) / 2, (h2 - crop) / 2)
+    }
+
+    fun convert(image: ImageProxy, out: IntArray): FrameInfo {
+        val info = frameInfo(image)
         val w = image.width
         val h = image.height
         val rotation = image.imageInfo.rotationDegrees
@@ -23,13 +41,19 @@ object YuvToRgb {
         val uPix = maxOf(1, uPlane.pixelStride)
         val vPix = maxOf(1, vPlane.pixelStride)
 
+        val W2 = info.w
+        val H2 = info.h
         val ow = OUT
         val oh = OUT
 
         for (oy in 0 until oh) {
-            val ny = oy.toFloat() / (oh - 1)
+            val cy = oy.toFloat() / (oh - 1)
             for (ox in 0 until ow) {
-                val nx = ox.toFloat() / (ow - 1)
+                val cx = ox.toFloat() / (ow - 1)
+                val ux = info.offX + cx * (info.cropSize - 1)
+                val uy = info.offY + cy * (info.cropSize - 1)
+                val nx = ux / (W2 - 1)
+                val ny = uy / (H2 - 1)
                 val sx: Float
                 val sy: Float
                 when (rotation) {
@@ -70,14 +94,6 @@ object YuvToRgb {
                         b.toInt()
             }
         }
-        return out
-    }
-
-    fun uprightSize(image: ImageProxy): Pair<Int, Int> {
-        return if (image.imageInfo.rotationDegrees == 90 || image.imageInfo.rotationDegrees == 270) {
-            image.height to image.width
-        } else {
-            image.width to image.height
-        }
+        return info
     }
 }
