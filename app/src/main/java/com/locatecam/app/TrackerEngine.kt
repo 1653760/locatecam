@@ -56,8 +56,8 @@ class TrackerEngine(context: Context) {
         session = env.createSession(bytes, opts)
         for ((k, v) in session!!.inputInfo) {
             val s = v.info.toString()
-            if (s.contains(templateSize.toString())) zName = k.key
-            if (s.contains(searchSize.toString())) xName = k.key
+            if (s.contains(templateSize.toString())) zName = k
+            if (s.contains(searchSize.toString())) xName = k
         }
         Log.i(TAG, "tracker loaded, z=$zName x=$xName")
     }
