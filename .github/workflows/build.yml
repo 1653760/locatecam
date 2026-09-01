@@ -19,7 +19,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install python deps
-        run: pip install ultralytics onnx onnxruntime onnxslim pillow
+        run: pip install ultralytics onnx onnxruntime onnxslim pillow requests
 
       - name: Export model
         run: python tools/export_model.py
