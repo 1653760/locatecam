@@ -32,11 +32,19 @@ class MainActivity : AppCompatActivity() {
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private val busy = AtomicBoolean(false)
     @Volatile private var engine: DetectionEngine? = null
+    @Volatile private var tracker: TrackerEngine? = null
     @Volatile private var vocab: Vocab? = null
     private var fpsEma = 0f
     private var lastFrameAt = 0L
     private var lastProcessAt = 0L
     private val rgb = IntArray(YuvToRgb.OUT * YuvToRgb.OUT)
+    private var fullFrame = IntArray(480 * 640)
+    private var fullW = 480
+    private var fullH = 640
+
+    @Volatile private var tracking = false
+    @Volatile private var lockedLabel = ""
+    private var lowStreak = 0
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -78,8 +86,15 @@ class MainActivity : AppCompatActivity() {
                 e.selectedIndices = findIndices(listOf("cell phone", "person", "cup", "book"))
                 e.warmup()
                 engine = e
+                var t: TrackerEngine? = null
+                try {
+                    t = TrackerEngine(this)
+                } catch (te: Throwable) {
+                    Log.w(TAG, "tracker unavailable: ${te.message}")
+                }
+                tracker = t
                 runOnUiThread {
-                    hudText.text = "就绪，开始识别：手机 / 人 / 杯子 / 书"
+                    hudText.text = if (t != null) "就绪（检测+跟踪），开始识别：手机 / 人 / 杯子 / 书" else "就绪（仅检测）"
                     startCamera()
                 }
             } catch (t: Throwable) {
@@ -157,6 +172,111 @@ class MainActivity : AppCompatActivity() {
             image.close()
             return
         }
+        val t = tracker
+        val interval = if (tracking && t != null) TRACK_THROTTLE_MS else THROTTLE_MS
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastProcessAt < interval || !busy.compareAndSet(false, true)) {
+            image.close()
+            return
+        }
+        lastProcessAt = nowMs
+        try {
+            if (tracking && t != null) {
+                val info = YuvToRgb.frameInfo(image)
+                if (fullW != info.w || fullH != info.h) {
+                    fullW = info.w
+                    fullH = info.h
+                    fullFrame = IntArray(fullW * fullH)
+                }
+                try {
+                    YuvToRgb.convertFull(image, fullFrame)
+                } finally {
+                    image.close()
+                }
+                val res = t.track(fullFrame, fullW, fullH)
+                if (res.box == null || res.score < 0.25f) {
+                    lowStreak++
+                } else {
+                    lowStreak = 0
+                }
+                val lost = lowStreak >= 5
+                runOnUiThread {
+                    if (lost) {
+                        tracking = false
+                        overlayView.clearTarget()
+                        Toast.makeText(this@MainActivity, "目标丢失，重新搜索", Toast.LENGTH_SHORT).show()
+                    } else {
+                        overlayView.setTarget(res.box, lockedLabel)
+                    }
+                    hudText.text = String.format(
+                        Locale.CHINA,
+                        "锁定 %s | 跟踪 %d ms | 置信 %.2f%s",
+                        lockedLabel, res.ms, res.score,
+                        if (lowStreak > 0) " (弱)" else ""
+                    )
+                }
+            } else {
+                var closed = false
+                try {
+                    val srcInfo: YuvToRgb.FrameInfo
+                    try {
+                        srcInfo = YuvToRgb.convert(image, rgb)
+                    } catch (ce: Throwable) {
+                        image.close()
+                        closed = true
+                        throw ce
+                    }
+                    val (dets, timing) = e.detect(rgb, srcInfo)
+                    val totalMs = (System.currentTimeMillis() - nowMs)
+                    val now = System.currentTimeMillis()
+                    if (lastFrameAt > 0) {
+                        val gap = (now - lastFrameAt).coerceAtLeast(1)
+                        val fps = 1000f / gap
+                        fpsEma = if (fpsEma == 0f) fps else fpsEma * 0.9f + fps * 0.1f
+                    }
+                    lastFrameAt = now
+                    val v = vocab
+                    val best = dets
+                        .filter { it.score >= 0.45f && it.box.width() * it.box.height() >= 0.02f * srcInfo.w * srcInfo.h }
+                        .maxByOrNull { it.score }
+                    var locked = false
+                    if (best != null && t != null) {
+                        if (fullW != srcInfo.w || fullH != srcInfo.h) {
+                            fullW = srcInfo.w
+                            fullH = srcInfo.h
+                            fullFrame = IntArray(fullW * fullH)
+                        }
+                        YuvToRgb.convertFull(image, fullFrame)
+                        image.close()
+                        closed = true
+                        t.init(fullFrame, fullW, fullH, best.box)
+                        lockedLabel = v?.display(best.labelIndex) ?: "?"
+                        tracking = true
+                        lowStreak = 0
+                        locked = true
+                    }
+                    runOnUiThread {
+                        if (locked) {
+                            Toast.makeText(this@MainActivity, "已锁定：$lockedLabel", Toast.LENGTH_SHORT).show()
+                        } else {
+                            hudText.text = String.format(
+                                Locale.CHINA,
+                                "引擎 %s | 预处理 %d ms | 推理 %d ms | 后处理 %d ms\n端到端 %d ms | %.1f FPS",
+                                e.engineMode, timing.preMs, timing.inferMs, timing.postMs, totalMs, fpsEma
+                            )
+                            overlayView.update(dets, srcInfo.w, srcInfo.h) { i -> v?.display(i) ?: "?" }
+                        }
+                    }
+                } finally {
+                    if (!closed) image.close()
+                }
+            }
+        } catch (t2: Throwable) {
+            Log.e(TAG, "frame error", t2)
+        } finally {
+            busy.set(false)
+        }
+    }
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastProcessAt < THROTTLE_MS || !busy.compareAndSet(false, true)) {
             image.close()
@@ -200,10 +320,12 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         cameraExecutor.shutdown()
         engine?.close()
+        tracker?.close()
     }
 
     companion object {
         private const val TAG = "LocateCam"
         private const val THROTTLE_MS = 1000L
+        private const val TRACK_THROTTLE_MS = 400L
     }
 }
