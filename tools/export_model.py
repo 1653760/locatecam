@@ -21,13 +21,24 @@ def load_vocab():
 
 
 def export_model(en_terms):
-    from ultralytics import YOLOWorld
+    from ultralytics import YOLOE, YOLOWorld
 
+    for size in ("l", "m", "s"):
+        try:
+            model = YOLOE(f"yoloe-11{size}.pt")
+            pe = model.get_text_pe(en_terms)
+            model.set_classes(en_terms, pe)
+            out = model.export(format="onnx", imgsz=640)
+            return str(out), f"yoloe-11{size}"
+        except Exception as e:
+            print(f"yoloe-11{size} failed: {e}")
+            traceback.print_exc()
+
+    print("all YOLOE sizes failed, falling back to yolov8s-worldv2")
     model = YOLOWorld("yolov8s-worldv2.pt")
     model.set_classes(en_terms)
-
     out = model.export(format="onnx", imgsz=640)
-    return str(out), "fp32"
+    return str(out), "worldv2-s"
 
 
 def validate(onnx_path, vocab, en_terms):
