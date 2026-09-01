@@ -89,9 +89,11 @@ class OverlayView @JvmOverloads constructor(
         val vh = height.toFloat()
         val tb = targetBox
         if (tb != null) {
-            val scaleT = maxOf(vw / srcW, vh / srcH)
-            val dxT = (vw - srcW * scaleT) / 2f
-            val dyT = (vh - srcH * scaleT) / 2f
+            val vwT = width.toFloat()
+            val vhT = height.toFloat()
+            val scaleT = maxOf(vwT / srcW, vhT / srcH)
+            val dxT = (vwT - srcW * scaleT) / 2f
+            val dyT = (vhT - srcH * scaleT) / 2f
             val r = RectF(
                 tb.left * scaleT + dxT,
                 tb.top * scaleT + dyT,
@@ -106,7 +108,7 @@ class OverlayView @JvmOverloads constructor(
             canvas.drawLine(cx, cy - arm, cx, cy + arm, crossPaint)
             val text = "锁定: $targetLabel"
             targetTextPaint.textSize = 46f
-            canvas.drawText(text, (r.left).coerceIn(0f, (vw - targetTextPaint.measureText(text)).coerceAtLeast(0f)), (r.top - 14f).coerceAtLeast(52f), targetTextPaint)
+            canvas.drawText(text, (r.left).coerceIn(0f, (vwT - targetTextPaint.measureText(text)).coerceAtLeast(0f)), (r.top - 14f).coerceAtLeast(52f), targetTextPaint)
             return
         }
         if (detections.isEmpty()) return
