@@ -1,8 +1,15 @@
 package com.locatecam.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.util.Log
 import android.util.Size
 import android.widget.Button
@@ -28,8 +35,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlayView: OverlayView
     private lateinit var hudText: TextView
     private lateinit var inputEdit: EditText
+    private lateinit var btnMic: Button
 
     private val cameraExecutor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val busy = AtomicBoolean(false)
     @Volatile private var engine: DetectionEngine? = null
     @Volatile private var tracker: TrackerEngine? = null
@@ -47,6 +56,12 @@ class MainActivity : AppCompatActivity() {
     private var lowStreak = 0
     private var trackFailCount = 0
 
+    // ---- voice (hands-free continuous listening) ----
+    private var speechRecognizer: SpeechRecognizer? = null
+    @Volatile private var voiceEnabled = true
+    @Volatile private var lastVoiceTriggerAt = 0L
+    private var voiceAvailable = true
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -58,6 +73,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val micPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startVoiceLoop()
+        } else {
+            voiceEnabled = false
+            btnMic.text = "🎤关"
+            Toast.makeText(this, "麦克风未授权，语音功能关闭（文字输入仍可用）", Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -65,7 +92,9 @@ class MainActivity : AppCompatActivity() {
         overlayView = findViewById(R.id.overlayView)
         hudText = findViewById(R.id.hudText)
         inputEdit = findViewById(R.id.inputEdit)
+        btnMic = findViewById(R.id.btnMic)
         findViewById<Button>(R.id.btnApply).setOnClickListener { applyInput() }
+        btnMic.setOnClickListener { toggleVoice() }
         inputEdit.setText("手机, 人, 杯子")
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -97,9 +126,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 tracker = t
                 runOnUiThread {
-                    hudText.text = if (t != null) "就绪（检测+跟踪就绪），开始识别：手机 / 人 / 杯子 / 书"
+                    hudText.text = if (t != null) "就绪（检测+跟踪就绪），说“我要找XX”或输入：手机 / 人 / 杯子 / 书"
                     else "跟踪器加载失败（$trackerErr）"
                     startCamera()
+                    maybeStartVoice()
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "init failed", t)
@@ -107,6 +137,187 @@ class MainActivity : AppCompatActivity() {
             }
         }.start()
     }
+
+    // ---------------- voice ----------------
+
+    private fun toggleVoice() {
+        if (voiceEnabled) {
+            voiceEnabled = false
+            btnMic.text = "🎤关"
+            speechRecognizer?.stopListening()
+            Toast.makeText(this, "语音监听已关闭", Toast.LENGTH_SHORT).show()
+        } else {
+            if (!voiceAvailable) {
+                Toast.makeText(this, "本机不支持语音识别服务", Toast.LENGTH_LONG).show()
+                return
+            }
+            voiceEnabled = true
+            btnMic.text = "🎤开"
+            maybeStartVoice()
+            Toast.makeText(this, "语音监听已开启，说“我要找XX”", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun maybeStartVoice() {
+        if (!voiceEnabled) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            startVoiceLoop()
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    @Synchronized
+    private fun startVoiceLoop() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            voiceAvailable = false
+            voiceEnabled = false
+            btnMic.text = "🎤关"
+            Toast.makeText(this, "本机无语音识别服务，语音功能不可用", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (speechRecognizer != null) return
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val text = partialResults
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull() ?: return
+                    if (text.isNotEmpty()) handleVoiceText(text)
+                }
+
+                override fun onResults(results: Bundle?) {
+                    val text = results
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                    if (!text.isNullOrEmpty()) handleVoiceText(text)
+                    restartListening()
+                }
+
+                override fun onError(error: Int) {
+                    restartListening()
+                }
+            })
+        }
+        startListeningNow()
+    }
+
+    private fun startListeningNow() {
+        val sr = speechRecognizer ?: return
+        if (!voiceEnabled) return
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "zh-CN")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        }
+        try {
+            sr.startListening(intent)
+        } catch (t: Throwable) {
+            Log.w(TAG, "startListening failed: ${t.message}")
+            mainHandler.postDelayed({ startListeningNow() }, 1000)
+        }
+    }
+
+    /** SpeechRecognizer sessions end after each utterance; restart to keep listening forever. */
+    private fun restartListening() {
+        if (!voiceEnabled) return
+        mainHandler.postDelayed({
+            val sr = speechRecognizer ?: return@postDelayed
+            if (voiceEnabled) {
+                try { sr.cancel() } catch (_: Throwable) {}
+                startListeningNow()
+            }
+        }, 300)
+    }
+
+    private val wakePrefixes = arrayOf(
+        "我要寻找一下", "我要寻找", "帮我寻找一下", "帮我寻找", "我想寻找一下", "我想寻找",
+        "我要找一下", "我想找一下", "帮我找一下", "帮我找", "我要找到", "我想找到",
+        "我要找", "我想找", "找一下", "寻找", "帮我", "我要", "我想", "找"
+    )
+
+    private val trailingFillers = arrayOf(
+        "在哪里", "在哪儿", "在哪", "在哪里呢", "谢谢", "好吗", "行吗", "一下", "呢", "啊", "吧"
+    )
+
+    /** Parse "我要找手机和钥匙" -> (["手机","钥匙"], true). Returns hasWake=false if no 找 in text. */
+    private fun parseVoiceCommand(raw: String): Pair<List<String>, Boolean> {
+        var s = raw.trim()
+            .replace(" ", "")
+            .replace("。", "")
+            .replace("，", "")
+            .replace(",", "")
+            .replace("、", "")
+            .replace("！", "")
+            .replace("？", "")
+        if (s.isEmpty() || !s.contains("找")) return emptyList<String>() to false
+        var changed = true
+        while (changed) {
+            changed = false
+            for (p in wakePrefixes) {
+                if (s.startsWith(p) && s.length > p.length) {
+                    s = s.substring(p.length); changed = true; break
+                }
+            }
+        }
+        for (f in trailingFillers) {
+            if (s.endsWith(f) && s.length > f.length) {
+                s = s.substring(0, s.length - f.length); break
+            }
+        }
+        // split multi-target: 手机和钥匙 / 手机钥匙 / 手机跟钥匙
+        val terms = s.split("和", "跟", "与")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it != "找" && it != "的" }
+        return terms to true
+    }
+
+    private fun handleVoiceText(raw: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastVoiceTriggerAt < 2500) return
+        val (terms, hasWake) = parseVoiceCommand(raw)
+        if (!hasWake || terms.isEmpty()) return
+        val v = vocab ?: return
+        val e = engine ?: return
+        val matched = ArrayList<Int>()
+        val missing = ArrayList<String>()
+        for (t in terms) {
+            val i = v.indexOf(t)
+            if (i >= 0) matched.add(i) else missing.add(t)
+        }
+        if (matched.isEmpty()) {
+            if (missing.isNotEmpty()) {
+                lastVoiceTriggerAt = now
+                runOnUiThread {
+                    Toast.makeText(this, "没听懂“${raw.trim()}”\n可试试：手机 人 猫 狗 钥匙 遥控器", Toast.LENGTH_LONG).show()
+                }
+            }
+            return
+        }
+        lastVoiceTriggerAt = now
+        runOnUiThread {
+            e.selectedIndices = matched.distinct()
+            tracking = false
+            lowStreak = 0
+            overlayView.clearTarget()
+            inputEdit.setText(matched.joinToString(",") { v.display(it) })
+            val msg = "语音指令：开始寻找 ${matched.joinToString("、") { v.display(it) }}" +
+                    if (missing.isEmpty()) "" else "\n未收录已忽略：${missing.joinToString("、")}"
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // ---------------- manual input ----------------
 
     private fun findIndices(terms: List<String>): List<Int> {
         val v = vocab ?: return emptyList()
@@ -307,6 +518,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        voiceEnabled = false
+        mainHandler.removeCallbacksAndMessages(null)
+        try { speechRecognizer?.destroy() } catch (_: Throwable) {}
+        speechRecognizer = null
         cameraExecutor.shutdown()
         engine?.close()
         tracker?.close()
