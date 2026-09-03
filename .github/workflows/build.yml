@@ -29,6 +29,15 @@ jobs:
           git clone --depth 1 https://github.com/botaoye/OSTrack /tmp/OSTrack
           python tools/export_tracker.py /tmp/OSTrack
 
+      - name: Download Vosk Chinese model
+        run: |
+          mkdir -p app/src/main/assets
+          cd /tmp
+          curl -sSL --retry 3 -o cn.zip https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip
+          unzip -q cn.zip
+          cd vosk-model-small-cn-0.22
+          zip -q -r "$GITHUB_WORKSPACE/app/src/main/assets/model-cn.zip" .
+
       - name: Show assets
         run: ls -lh app/src/main/assets/
 
