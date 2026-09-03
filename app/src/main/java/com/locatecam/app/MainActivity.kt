@@ -1,15 +1,9 @@
 package com.locatecam.app
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.util.Log
 import android.util.Size
 import android.widget.Button
@@ -38,7 +32,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnMic: Button
 
     private val cameraExecutor = Executors.newSingleThreadExecutor()
-    private val mainHandler = Handler(Looper.getMainLooper())
     private val busy = AtomicBoolean(false)
     @Volatile private var engine: DetectionEngine? = null
     @Volatile private var tracker: TrackerEngine? = null
@@ -56,11 +49,10 @@ class MainActivity : AppCompatActivity() {
     private var lowStreak = 0
     private var trackFailCount = 0
 
-    // ---- voice (hands-free continuous listening) ----
-    private var speechRecognizer: SpeechRecognizer? = null
+    // ---- voice (offline Vosk, hands-free continuous listening) ----
+    private var voiceEngine: VoiceEngine? = null
     @Volatile private var voiceEnabled = true
     @Volatile private var lastVoiceTriggerAt = 0L
-    private var voiceAvailable = true
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -144,16 +136,12 @@ class MainActivity : AppCompatActivity() {
         if (voiceEnabled) {
             voiceEnabled = false
             btnMic.text = "🎤关"
-            speechRecognizer?.stopListening()
+            voiceEngine?.stop()
             Toast.makeText(this, "语音监听已关闭", Toast.LENGTH_SHORT).show()
         } else {
-            if (!voiceAvailable) {
-                Toast.makeText(this, "本机不支持语音识别服务", Toast.LENGTH_LONG).show()
-                return
-            }
             voiceEnabled = true
             btnMic.text = "🎤开"
-            maybeStartVoice()
+            startVoiceLoop()
             Toast.makeText(this, "语音监听已开启，说“我要找XX”", Toast.LENGTH_SHORT).show()
         }
     }
@@ -169,75 +157,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    @Synchronized
     private fun startVoiceLoop() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            voiceAvailable = false
-            voiceEnabled = false
-            btnMic.text = "🎤关"
-            Toast.makeText(this, "本机无语音识别服务，语音功能不可用", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (speechRecognizer != null) return
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
-            setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {}
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-
-                override fun onPartialResults(partialResults: Bundle?) {
-                    val text = partialResults
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull() ?: return
-                    if (text.isNotEmpty()) handleVoiceText(text)
+        voiceEngine?.let { it.start(); return }
+        voiceEngine = VoiceEngine(
+            this,
+            onText = { text, _ -> handleVoiceText(text) },
+            onError = { msg ->
+                runOnUiThread {
+                    voiceEnabled = false
+                    btnMic.text = "🎤关"
+                    Toast.makeText(this, "语音不可用：$msg", Toast.LENGTH_LONG).show()
                 }
-
-                override fun onResults(results: Bundle?) {
-                    val text = results
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()
-                    if (!text.isNullOrEmpty()) handleVoiceText(text)
-                    restartListening()
-                }
-
-                override fun onError(error: Int) {
-                    restartListening()
-                }
-            })
-        }
-        startListeningNow()
-    }
-
-    private fun startListeningNow() {
-        val sr = speechRecognizer ?: return
-        if (!voiceEnabled) return
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "zh-CN")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        }
-        try {
-            sr.startListening(intent)
-        } catch (t: Throwable) {
-            Log.w(TAG, "startListening failed: ${t.message}")
-            mainHandler.postDelayed({ startListeningNow() }, 1000)
-        }
-    }
-
-    /** SpeechRecognizer sessions end after each utterance; restart to keep listening forever. */
-    private fun restartListening() {
-        if (!voiceEnabled) return
-        mainHandler.postDelayed({
-            val sr = speechRecognizer ?: return@postDelayed
-            if (voiceEnabled) {
-                try { sr.cancel() } catch (_: Throwable) {}
-                startListeningNow()
             }
-        }, 300)
+        ).also { it.start() }
     }
 
     private val wakePrefixes = arrayOf(
@@ -519,9 +451,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         voiceEnabled = false
-        mainHandler.removeCallbacksAndMessages(null)
-        try { speechRecognizer?.destroy() } catch (_: Throwable) {}
-        speechRecognizer = null
+        voiceEngine?.close()
+        voiceEngine = null
         cameraExecutor.shutdown()
         engine?.close()
         tracker?.close()
