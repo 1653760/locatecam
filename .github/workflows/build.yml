@@ -29,6 +29,9 @@ jobs:
           git clone --depth 1 https://github.com/botaoye/OSTrack /tmp/OSTrack
           python tools/export_tracker.py /tmp/OSTrack
 
+      - name: Export depth model
+        run: python tools/export_depth.py
+
       - name: Download Vosk Chinese model
         run: |
           mkdir -p app/src/main/assets
