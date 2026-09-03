@@ -19,6 +19,7 @@ class OverlayView @JvmOverloads constructor(
     private var labels: ((Int) -> String)? = null
     private var targetBox: RectF? = null
     private var targetLabel = ""
+    private var targetInfo = ""
 
     private val targetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -36,14 +37,16 @@ class OverlayView @JvmOverloads constructor(
         color = 0xAAFF5252.toInt()
     }
 
-    fun setTarget(box: RectF?, label: String) {
+    fun setTarget(box: RectF?, label: String, info: String = "") {
         targetBox = box
         targetLabel = label
+        targetInfo = info
         invalidate()
     }
 
     fun clearTarget() {
         targetBox = null
+        targetInfo = ""
         invalidate()
     }
 
@@ -109,6 +112,13 @@ class OverlayView @JvmOverloads constructor(
             val text = "锁定: $targetLabel"
             targetTextPaint.textSize = 46f
             canvas.drawText(text, (r.left).coerceIn(0f, (vwT - targetTextPaint.measureText(text)).coerceAtLeast(0f)), (r.top - 14f).coerceAtLeast(52f), targetTextPaint)
+            if (targetInfo.isNotEmpty()) {
+                val infoText = targetInfo
+                targetTextPaint.textSize = 40f
+                val ix = (r.left).coerceIn(0f, (vwT - targetTextPaint.measureText(infoText)).coerceAtLeast(0f))
+                val iy = (r.bottom + 48f).coerceAtMost(vhT - 8f)
+                canvas.drawText(infoText, ix, iy, targetTextPaint)
+            }
             return
         }
         if (detections.isEmpty()) return
