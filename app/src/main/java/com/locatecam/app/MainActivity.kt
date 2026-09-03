@@ -49,6 +49,11 @@ class MainActivity : AppCompatActivity() {
     private var lowStreak = 0
     private var trackFailCount = 0
 
+    // depth / direction
+    @Volatile private var depth: DepthEngine? = null
+    private var depthTick = 0
+    @Volatile private var lastDistM = -1f
+
     // ---- voice (offline Vosk, hands-free continuous listening) ----
     private var voiceEngine: VoiceEngine? = null
     @Volatile private var voiceEnabled = true
@@ -117,8 +122,15 @@ class MainActivity : AppCompatActivity() {
                     trackerErr = "${te.javaClass.simpleName}: ${te.message}"
                 }
                 tracker = t
+                var d: DepthEngine? = null
+                try {
+                    d = DepthEngine(this)
+                } catch (de: Throwable) {
+                    Log.w(TAG, "depth unavailable: ${de.message}")
+                }
+                depth = d
                 runOnUiThread {
-                    hudText.text = if (t != null) "就绪（检测+跟踪就绪），说“我要找XX”或输入：手机 / 人 / 杯子 / 书"
+                    hudText.text = if (t != null) "就绪（检测+跟踪${if (d != null) "+测距" else ""}就绪），说“我要找XX”或输入目标"
                     else "跟踪器加载失败（$trackerErr）"
                     startCamera()
                     maybeStartVoice()
@@ -241,6 +253,7 @@ class MainActivity : AppCompatActivity() {
             e.selectedIndices = matched.distinct()
             tracking = false
             lowStreak = 0
+            lastDistM = -1f
             overlayView.clearTarget()
             inputEdit.setText(matched.joinToString(",") { v.display(it) })
             val msg = "语音指令：开始寻找 ${matched.joinToString("、") { v.display(it) }}" +
@@ -250,6 +263,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------------- manual input ----------------
+
+    /** Horizontal position of the box center: 左侧 / 前方 / 右侧. */
+    private fun directionOf(box: RectF, frameW: Int): String {
+        val cx = box.centerX() / frameW.coerceAtLeast(1)
+        return when {
+            cx < 0.40f -> "左侧"
+            cx <= 0.60f -> "前方"
+            else -> "右侧"
+        }
+    }
+
+    private fun targetInfo(box: RectF, frameW: Int): String {
+        val dir = directionOf(box, frameW)
+        return if (lastDistM > 0f) String.format(Locale.CHINA, "%.1f米 · %s", lastDistM, dir)
+        else "$dir · 测距中"
+    }
+
+    private fun refreshDistance(box: RectF) {
+        val d = depth ?: return
+        val t0 = System.currentTimeMillis()
+        lastDistM = d.estimate(fullFrame, fullW, fullH, box)
+        lastDepthMs = System.currentTimeMillis() - t0
+    }
+
+    @Volatile private var lastDepthMs = 0L
 
     private fun findIndices(terms: List<String>): List<Int> {
         val v = vocab ?: return emptyList()
@@ -283,6 +321,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
         e.selectedIndices = matched.distinct()
+        // reset tracking state so the old target's red box disappears immediately
+        tracking = false
+        lowStreak = 0
+        lastDistM = -1f
+        overlayView.clearTarget()
         val msg = if (missing.isEmpty()) {
             "开始识别：${matched.joinToString("、") { v.display(it) }}"
         } else {
@@ -368,18 +411,25 @@ class MainActivity : AppCompatActivity() {
                     lowStreak = 0
                 }
                 val lost = lowStreak >= 5
+                // refresh distance every 2nd track tick (~0.8s)
+                if (!lost && r.box != null) {
+                    depthTick++
+                    if (depthTick % 2 == 0) refreshDistance(r.box)
+                }
+                val infoText = if (!lost && r.box != null) targetInfo(r.box, fullW) else ""
                 runOnUiThread {
                     if (lost) {
                         tracking = false
+                        lastDistM = -1f
                         overlayView.clearTarget()
                         Toast.makeText(this@MainActivity, "目标丢失，重新搜索", Toast.LENGTH_SHORT).show()
                     } else {
-                        overlayView.setTarget(r.box, lockedLabel)
+                        overlayView.setTarget(r.box, lockedLabel, infoText)
                     }
                     hudText.text = String.format(
                         Locale.CHINA,
-                        "跟踪模式 | 锁定 %s | 跟踪 %d ms | 置信 %.2f%s",
-                        lockedLabel, r.ms, r.score,
+                        "跟踪 | %s | 跟踪 %d ms | 深度 %d ms | 置信 %.2f%s",
+                        if (infoText.isNotEmpty()) infoText else lockedLabel, r.ms, lastDepthMs, r.score,
                         if (lowStreak > 0) " (弱)" else ""
                     )
                 }
@@ -408,6 +458,7 @@ class MainActivity : AppCompatActivity() {
                         .filter { it.score >= 0.40f && it.box.width() * it.box.height() >= 0.015f * srcInfo.w * srcInfo.h }
                         .maxByOrNull { it.score }
                     var locked = false
+                    var lockInfo = ""
                     if (best != null && t != null) {
                         if (fullW != srcInfo.w || fullH != srcInfo.h) {
                             fullW = srcInfo.w
@@ -421,12 +472,18 @@ class MainActivity : AppCompatActivity() {
                         lockedLabel = v?.display(best.labelIndex) ?: "?"
                         tracking = true
                         lowStreak = 0
+                        depthTick = 1
                         locked = true
+                    }
+                    if (locked) {
+                        // immediate first distance reading at lock time
+                        refreshDistance(best!!.box)
+                        lockInfo = targetInfo(best.box, fullW)
                     }
                     runOnUiThread {
                         if (locked) {
-                            overlayView.setTarget(best!!.box, lockedLabel)
-                            Toast.makeText(this@MainActivity, "已锁定：$lockedLabel，开始跟踪", Toast.LENGTH_LONG).show()
+                            overlayView.setTarget(best!!.box, lockedLabel, lockInfo)
+                            Toast.makeText(this@MainActivity, "已锁定：$lockedLabel（$lockInfo），开始跟踪", Toast.LENGTH_LONG).show()
                         } else {
                             hudText.text = String.format(
                                 Locale.CHINA,
@@ -456,6 +513,8 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor.shutdown()
         engine?.close()
         tracker?.close()
+        depth?.close()
+        depth = null
     }
 
     companion object {
