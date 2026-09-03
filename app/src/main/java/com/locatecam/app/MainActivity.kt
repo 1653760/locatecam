@@ -47,6 +47,7 @@ class MainActivity : AppCompatActivity() {
 
     @Volatile private var tracking = false
     @Volatile private var lockedLabel = ""
+    @Volatile private var lockedEn = ""
     private var lowStreak = 0
     private var trackFailCount = 0
 
@@ -54,6 +55,10 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var depth: DepthEngine? = null
     private var depthTick = 0
     @Volatile private var lastDistM = -1f
+
+    // periodic class re-validation while tracking
+    private var validateTick = 0
+    private var classMissCount = 0
 
     // ---- voice (offline Vosk, hands-free continuous listening) ----
     private var voiceEngine: VoiceEngine? = null
@@ -255,6 +260,9 @@ class MainActivity : AppCompatActivity() {
             tracking = false
             lowStreak = 0
             lastDistM = -1f
+            lockedEn = ""
+            classMissCount = 0
+            validateTick = 0
             overlayView.clearTarget()
             inputEdit.setText(matched.joinToString(",") { v.display(it) })
             val msg = "语音指令：开始寻找 ${matched.joinToString("、") { v.display(it) }}" +
@@ -282,13 +290,40 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshDistance(box: RectF) {
-        val d = depth ?: return
-        val t0 = System.currentTimeMillis()
-        lastDistM = d.estimate(fullFrame, fullW, fullH, box)
-        lastDepthMs = System.currentTimeMillis() - t0
+        val d = depth
+        val dModel = if (d != null) {
+            val t0 = System.currentTimeMillis()
+            val v = d.estimate(fullFrame, fullW, fullH, box)
+            lastDepthMs = System.currentTimeMillis() - t0
+            v
+        } else -1f
+        // Geometric estimate: pinhole size prior. Reliable when the box is large
+        // (near field), where the metric depth model is out of distribution.
+        val boxWFrac = box.width() / fullW.coerceAtLeast(1)
+        val prior = SIZE_PRIOR[lockedEn]
+        val dGeo = if (prior != null && boxWFrac > 0.02f) {
+            prior / (2f * HFOV_TAN_HALF * boxWFrac)
+        } else -1f
+        // blend weight: 0 below 22% box width (model), 1 above 52% (geometric)
+        val wGeo = ((boxWFrac - 0.22f) / 0.30f).coerceIn(0f, 1f)
+        lastDistM = when {
+            dGeo > 0f && dModel > 0f -> wGeo * dGeo + (1f - wGeo) * dModel
+            dGeo > 0f -> dGeo
+            else -> dModel
+        }
     }
 
     @Volatile private var lastDepthMs = 0L
+
+    private fun iou(a: RectF, b: RectF): Float {
+        val l = maxOf(a.left, b.left)
+        val t = maxOf(a.top, b.top)
+        val r = minOf(a.right, b.right)
+        val bo = minOf(a.bottom, b.bottom)
+        val inter = (r - l).coerceAtLeast(0f) * (bo - t).coerceAtLeast(0f)
+        val uni = a.width() * a.height() + b.width() * b.height() - inter
+        return if (uni > 0f) inter / uni else 0f
+    }
 
     private fun findIndices(terms: List<String>): List<Int> {
         val v = vocab ?: return emptyList()
@@ -326,6 +361,9 @@ class MainActivity : AppCompatActivity() {
         tracking = false
         lowStreak = 0
         lastDistM = -1f
+        lockedEn = ""
+        classMissCount = 0
+        validateTick = 0
         overlayView.clearTarget()
         val msg = if (missing.isEmpty()) {
             "开始识别：${matched.joinToString("、") { v.display(it) }}"
@@ -379,7 +417,16 @@ class MainActivity : AppCompatActivity() {
                     fullH = info.h
                     fullFrame = IntArray(fullW * fullH)
                 }
+                validateTick++
+                val needValidation = validateTick % 4 == 0
                 try {
+                    if (needValidation) {
+                        try {
+                            YuvToRgb.convert(image, rgb)
+                        } catch (ce: Throwable) {
+                            Log.w(TAG, "validation convert failed: ${ce.message}")
+                        }
+                    }
                     YuvToRgb.convertFull(image, fullFrame)
                 } finally {
                     image.close()
@@ -411,7 +458,23 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     lowStreak = 0
                 }
-                val lost = lowStreak >= 5
+                // periodic class re-validation: is the tracked box still the target class?
+                var classFail = false
+                if (lowStreak < 5 && needValidation && r.box != null) {
+                    try {
+                        val (vdets, _) = e.detect(rgb, info)
+                        val sel = e.selectedIndices
+                        val ok = vdets.any { dt ->
+                            dt.score >= 0.35f && sel.contains(dt.labelIndex) && iou(dt.box, r.box) >= 0.25f
+                        }
+                        if (ok) classMissCount = 0 else classMissCount++
+                        classFail = classMissCount >= 2
+                        if (classFail) Log.i(TAG, "class validation failed ${classMissCount}x, unlocking")
+                    } catch (de: Throwable) {
+                        Log.w(TAG, "validation detect failed: ${de.message}")
+                    }
+                }
+                val lost = lowStreak >= 5 || classFail
                 // refresh distance every 2nd track tick (~0.8s)
                 if (!lost && r.box != null) {
                     depthTick++
@@ -422,8 +485,10 @@ class MainActivity : AppCompatActivity() {
                     if (lost) {
                         tracking = false
                         lastDistM = -1f
+                        classMissCount = 0
                         overlayView.clearTarget()
-                        Toast.makeText(this@MainActivity, "目标丢失，重新搜索", Toast.LENGTH_SHORT).show()
+                        val msg = if (classFail) "目标类别校验失败，重新搜索" else "目标丢失，重新搜索"
+                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
                     } else {
                         overlayView.setTarget(r.box, lockedLabel, infoText)
                     }
@@ -471,9 +536,12 @@ class MainActivity : AppCompatActivity() {
                         closed = true
                         t.init(fullFrame, fullW, fullH, best.box)
                         lockedLabel = v?.display(best.labelIndex) ?: "?"
+                        lockedEn = v?.entries?.getOrNull(best.labelIndex)?.en?.lowercase() ?: ""
                         tracking = true
                         lowStreak = 0
                         depthTick = 1
+                        validateTick = 0
+                        classMissCount = 0
                         locked = true
                     }
                     if (locked) {
@@ -522,5 +590,21 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "LocateCam"
         private const val THROTTLE_MS = 1000L
         private const val TRACK_THROTTLE_MS = 400L
+
+        // Assumed camera horizontal FOV ~64° -> tan(half) ~ 0.625
+        private const val HFOV_TAN_HALF = 0.625f
+
+        // Typical real-world widths (meters) of findable objects, for near-field
+        // geometric distance: d = realWidth / (2*tan(FOV/2) * boxWidthFraction)
+        private val SIZE_PRIOR = mapOf(
+            "person" to 0.50f, "cell phone" to 0.07f, "laptop" to 0.34f, "cup" to 0.09f,
+            "book" to 0.17f, "bottle" to 0.07f, "chair" to 0.45f, "keyboard" to 0.42f,
+            "computer keyboard" to 0.42f, "mouse" to 0.06f, "computer mouse" to 0.06f,
+            "tv" to 0.70f, "monitor" to 0.70f, "remote" to 0.055f, "remote control" to 0.055f,
+            "backpack" to 0.32f, "handbag" to 0.30f, "suitcase" to 0.38f, "dog" to 0.32f,
+            "cat" to 0.28f, "teddy bear" to 0.30f, "clock" to 0.25f, "scissors" to 0.10f,
+            "bowl" to 0.15f, "wine glass" to 0.07f, "umbrella" to 0.35f, "vase" to 0.12f,
+            "toothbrush" to 0.02f
+        )
     }
 }
