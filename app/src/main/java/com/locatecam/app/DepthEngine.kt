@@ -68,7 +68,9 @@ class DepthEngine(context: Context) {
             }
             if (n == 0) return -1f
             java.util.Arrays.sort(sampleScratch, 0, n)
-            val med = sampleScratch[n / 2]
+            // 30th percentile: bias toward the nearest surface, robust to background
+            // bleed at box edges (box tends to be slightly larger than the object)
+            val med = sampleScratch[(n * 3) / 10]
             return if (med in 0.05f..40f) med else -1f
         } catch (t: Throwable) {
             Log.w(TAG, "depth estimate failed: ${t.message}")
