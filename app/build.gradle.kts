@@ -11,8 +11,8 @@ android {
         applicationId = "com.locatecam.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "0.12"
+        versionCode = 13
+        versionName = "0.13"
     }
 
     buildTypes {
@@ -49,4 +49,6 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("com.alphacephei:vosk-android:0.3.47")
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
 }
