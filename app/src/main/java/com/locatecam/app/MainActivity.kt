@@ -2,6 +2,7 @@ package com.locatecam.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.RectF
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
